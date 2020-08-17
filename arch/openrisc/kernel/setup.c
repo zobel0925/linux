@@ -35,7 +35,6 @@
 #include <linux/device.h>
 
 #include <asm/sections.h>
-#include <asm/pgtable.h>
 #include <asm/types.h>
 #include <asm/setup.h>
 #include <asm/io.h>
@@ -293,13 +292,15 @@ void __init setup_arch(char **cmdline_p)
 	init_mm.brk = (unsigned long)_end;
 
 #ifdef CONFIG_BLK_DEV_INITRD
-	initrd_start = (unsigned long)&__initrd_start;
-	initrd_end = (unsigned long)&__initrd_end;
 	if (initrd_start == initrd_end) {
+		printk(KERN_INFO "Initial ramdisk not found\n");
 		initrd_start = 0;
 		initrd_end = 0;
+	} else {
+		printk(KERN_INFO "Initial ramdisk at: 0x%p (%lu bytes)\n",
+		       (void *)(initrd_start), initrd_end - initrd_start);
+		initrd_below_start_ok = 1;
 	}
-	initrd_below_start_ok = 1;
 #endif
 
 	/* setup memblock allocator */
@@ -307,11 +308,6 @@ void __init setup_arch(char **cmdline_p)
 
 	/* paging_init() sets up the MMU and marks all pages as reserved */
 	paging_init();
-
-#if defined(CONFIG_VT) && defined(CONFIG_DUMMY_CONSOLE)
-	if (!conswitchp)
-		conswitchp = &dummy_con;
-#endif
 
 	*cmdline_p = boot_command_line;
 

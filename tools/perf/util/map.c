@@ -44,8 +44,8 @@ static inline int is_no_dso_memory(const char *filename)
 
 static inline int is_android_lib(const char *filename)
 {
-	return !strncmp(filename, "/data/app-lib", 13) ||
-	       !strncmp(filename, "/system/lib", 11);
+	return strstarts(filename, "/data/app-lib/") ||
+	       strstarts(filename, "/system/lib/");
 }
 
 static inline bool replace_android_lib(const char *filename, char *newfilename)
@@ -65,7 +65,7 @@ static inline bool replace_android_lib(const char *filename, char *newfilename)
 
 	app_abi_length = strlen(app_abi);
 
-	if (!strncmp(filename, "/data/app-lib", 13)) {
+	if (strstarts(filename, "/data/app-lib/")) {
 		char *apk_path;
 
 		if (!app_abi_length)
@@ -89,7 +89,7 @@ static inline bool replace_android_lib(const char *filename, char *newfilename)
 		return true;
 	}
 
-	if (!strncmp(filename, "/system/lib/", 11)) {
+	if (strstarts(filename, "/system/lib/")) {
 		char *ndk, *app;
 		const char *arch;
 		size_t ndk_length;
@@ -267,6 +267,11 @@ bool __map__is_bpf_prog(const struct map *map)
 	return name && (strstr(name, "bpf_prog_") == name);
 }
 
+bool __map__is_ool(const struct map *map)
+{
+	return map->dso && map->dso->binary_type == DSO_BINARY_TYPE__OOL;
+}
+
 bool map__has_symbols(const struct map *map)
 {
 	return dso__has_symbols(map->dso);
@@ -375,8 +380,13 @@ struct symbol *map__find_symbol_by_name(struct map *map, const char *name)
 
 struct map *map__clone(struct map *from)
 {
-	struct map *map = memdup(from, sizeof(*map));
+	size_t size = sizeof(struct map);
+	struct map *map;
 
+	if (from->dso && from->dso->kernel)
+		size += sizeof(struct kmap);
+
+	map = memdup(from, size);
 	if (map != NULL) {
 		refcount_set(&map->refcnt, 1);
 		RB_CLEAR_NODE(&map->rb_node);
@@ -426,7 +436,7 @@ int map__fprintf_srcline(struct map *map, u64 addr, const char *prefix,
 
 	if (map && map->dso) {
 		char *srcline = map__srcline(map, addr, NULL);
-		if (srcline != SRCLINE_UNKNOWN)
+		if (strncmp(srcline, SRCLINE_UNKNOWN, strlen(SRCLINE_UNKNOWN)) != 0)
 			ret = fprintf(fp, "%s%s", prefix, srcline);
 		free_srcline(srcline);
 	}
@@ -476,7 +486,7 @@ u64 map__rip_2objdump(struct map *map, u64 rip)
 	 * kernel modules also have DSO_TYPE_USER in dso->kernel,
 	 * but all kernel modules are ET_REL, so won't get here.
 	 */
-	if (map->dso->kernel == DSO_TYPE_USER)
+	if (map->dso->kernel == DSO_SPACE__USER)
 		return rip + map->dso->text_offset;
 
 	return map->unmap_ip(map, rip) - map->reloc;
@@ -506,7 +516,7 @@ u64 map__objdump_2mem(struct map *map, u64 ip)
 	 * kernel modules also have DSO_TYPE_USER in dso->kernel,
 	 * but all kernel modules are ET_REL, so won't get here.
 	 */
-	if (map->dso->kernel == DSO_TYPE_USER)
+	if (map->dso->kernel == DSO_SPACE__USER)
 		return map->unmap_ip(map, ip - map->dso->text_offset);
 
 	return ip + map->reloc;
@@ -538,6 +548,16 @@ void maps__insert(struct maps *maps, struct map *map)
 	__maps__insert(maps, map);
 	++maps->nr_maps;
 
+	if (map->dso && map->dso->kernel) {
+		struct kmap *kmap = map__kmap(map);
+
+		if (kmap)
+			kmap->kmaps = maps;
+		else
+			pr_err("Internal error: kernel dso with non kernel map\n");
+	}
+
+
 	/*
 	 * If we already performed some search by name, then we need to add the just
 	 * inserted map and resort.
@@ -549,6 +569,7 @@ void maps__insert(struct maps *maps, struct map *map)
 
 			if (maps_by_name == NULL) {
 				__maps__free_maps_by_name(maps);
+				up_write(&maps->lock);
 				return;
 			}
 

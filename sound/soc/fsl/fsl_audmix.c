@@ -116,13 +116,9 @@ static int fsl_audmix_put_mix_clk_src(struct snd_kcontrol *kcontrol,
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 	unsigned int *item = ucontrol->value.enumerated.item;
 	unsigned int reg_val, val, mix_clk;
-	int ret = 0;
 
 	/* Get current state */
-	ret = snd_soc_component_read(comp, FSL_AUDMIX_CTR, &reg_val);
-	if (ret)
-		return ret;
-
+	reg_val = snd_soc_component_read(comp, FSL_AUDMIX_CTR);
 	mix_clk = ((reg_val & FSL_AUDMIX_CTR_MIXCLK_MASK)
 			>> FSL_AUDMIX_CTR_MIXCLK_SHIFT);
 	val = snd_soc_enum_item_to_val(e, item[0]);
@@ -159,12 +155,10 @@ static int fsl_audmix_put_out_src(struct snd_kcontrol *kcontrol,
 	unsigned int *item = ucontrol->value.enumerated.item;
 	u32 out_src, mix_clk;
 	unsigned int reg_val, val, mask = 0, ctr = 0;
-	int ret = 0;
+	int ret;
 
 	/* Get current state */
-	ret = snd_soc_component_read(comp, FSL_AUDMIX_CTR, &reg_val);
-	if (ret)
-		return ret;
+	reg_val = snd_soc_component_read(comp, FSL_AUDMIX_CTR);
 
 	/* "From" state */
 	out_src = ((reg_val & FSL_AUDMIX_CTR_OUTSRC_MASK)
@@ -505,21 +499,28 @@ static int fsl_audmix_probe(struct platform_device *pdev)
 					      ARRAY_SIZE(fsl_audmix_dai));
 	if (ret) {
 		dev_err(dev, "failed to register ASoC DAI\n");
-		return ret;
+		goto err_disable_pm;
 	}
 
 	priv->pdev = platform_device_register_data(dev, mdrv, 0, NULL, 0);
 	if (IS_ERR(priv->pdev)) {
 		ret = PTR_ERR(priv->pdev);
 		dev_err(dev, "failed to register platform %s: %d\n", mdrv, ret);
+		goto err_disable_pm;
 	}
 
+	return 0;
+
+err_disable_pm:
+	pm_runtime_disable(dev);
 	return ret;
 }
 
 static int fsl_audmix_remove(struct platform_device *pdev)
 {
 	struct fsl_audmix *priv = dev_get_drvdata(&pdev->dev);
+
+	pm_runtime_disable(&pdev->dev);
 
 	if (priv->pdev)
 		platform_device_unregister(priv->pdev);

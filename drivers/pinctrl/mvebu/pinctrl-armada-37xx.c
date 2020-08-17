@@ -45,13 +45,14 @@
  * The pins of a pinmux groups are composed of one or two groups of contiguous
  * pins.
  * @name:	Name of the pin group, used to lookup the group.
- * @start_pins:	Index of the first pin of the main range of pins belonging to
+ * @start_pin:	Index of the first pin of the main range of pins belonging to
  *		the group
  * @npins:	Number of pins included in the first range
  * @reg_mask:	Bit mask matching the group in the selection register
- * @extra_pins:	Index of the first pin of the optional second range of pins
+ * @val:	Value to write to the registers for a given function
+ * @extra_pin:	Index of the first pin of the optional second range of pins
  *		belonging to the group
- * @npins:	Number of pins included in the second optional range
+ * @extra_npins:Number of pins included in the second optional range
  * @funcs:	A list of pinmux functions that can be selected for this group.
  * @pins:	List of the pins included in the group
  */
@@ -403,7 +404,10 @@ static int armada_37xx_gpio_get_direction(struct gpio_chip *chip,
 	mask = BIT(offset);
 	regmap_read(info->regmap, reg, &val);
 
-	return !(val & mask);
+	if (val & mask)
+		return GPIO_LINE_DIRECTION_OUT;
+
+	return GPIO_LINE_DIRECTION_IN;
 }
 
 static int armada_37xx_gpio_direction_output(struct gpio_chip *chip,
@@ -733,7 +737,7 @@ static int armada_37xx_irqchip_register(struct platform_device *pdev,
 			ret = 0;
 			break;
 		}
-	};
+	}
 	if (ret) {
 		dev_err(dev, "no gpio-controller child node\n");
 		return ret;
@@ -800,7 +804,7 @@ static int armada_37xx_gpiochip_register(struct platform_device *pdev,
 			ret = 0;
 			break;
 		}
-	};
+	}
 	if (ret)
 		return ret;
 

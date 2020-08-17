@@ -175,8 +175,8 @@ void exit_creds(struct task_struct *tsk)
 	put_cred(cred);
 
 #ifdef CONFIG_KEYS_REQUEST_CACHE
-	key_put(current->cached_requested_key);
-	current->cached_requested_key = NULL;
+	key_put(tsk->cached_requested_key);
+	tsk->cached_requested_key = NULL;
 #endif
 }
 
@@ -314,6 +314,9 @@ struct cred *prepare_exec_creds(void)
 	key_put(new->process_keyring);
 	new->process_keyring = NULL;
 #endif
+
+	new->suid = new->fsuid = new->euid;
+	new->sgid = new->fsgid = new->egid;
 
 	return new;
 }
@@ -675,8 +678,6 @@ void __init cred_init(void)
  * The caller may change these controls afterwards if desired.
  *
  * Returns the new credentials or NULL if out of memory.
- *
- * Does not take, and does not return holding current->cred_replace_mutex.
  */
 struct cred *prepare_kernel_cred(struct task_struct *daemon)
 {

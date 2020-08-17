@@ -1061,7 +1061,7 @@ static void encode_nfs4_verifier(struct xdr_stream *xdr, const nfs4_verifier *ve
 static __be32 *
 xdr_encode_nfstime4(__be32 *p, const struct timespec64 *t)
 {
-	p = xdr_encode_hyper(p, (__s64)t->tv_sec);
+	p = xdr_encode_hyper(p, t->tv_sec);
 	*p++ = cpu_to_be32(t->tv_nsec);
 	return p;
 }
@@ -4097,7 +4097,7 @@ static int decode_attr_time_access(struct xdr_stream *xdr, uint32_t *bitmap, str
 			status = NFS_ATTR_FATTR_ATIME;
 		bitmap[1] &= ~FATTR4_WORD1_TIME_ACCESS;
 	}
-	dprintk("%s: atime=%ld\n", __func__, (long)time->tv_sec);
+	dprintk("%s: atime=%lld\n", __func__, time->tv_sec);
 	return status;
 }
 
@@ -4115,7 +4115,7 @@ static int decode_attr_time_metadata(struct xdr_stream *xdr, uint32_t *bitmap, s
 			status = NFS_ATTR_FATTR_CTIME;
 		bitmap[1] &= ~FATTR4_WORD1_TIME_METADATA;
 	}
-	dprintk("%s: ctime=%ld\n", __func__, (long)time->tv_sec);
+	dprintk("%s: ctime=%lld\n", __func__, time->tv_sec);
 	return status;
 }
 
@@ -4132,8 +4132,8 @@ static int decode_attr_time_delta(struct xdr_stream *xdr, uint32_t *bitmap,
 		status = decode_attr_time(xdr, time);
 		bitmap[1] &= ~FATTR4_WORD1_TIME_DELTA;
 	}
-	dprintk("%s: time_delta=%ld %ld\n", __func__, (long)time->tv_sec,
-		(long)time->tv_nsec);
+	dprintk("%s: time_delta=%lld %ld\n", __func__, time->tv_sec,
+		time->tv_nsec);
 	return status;
 }
 
@@ -4166,7 +4166,11 @@ static int decode_attr_security_label(struct xdr_stream *xdr, uint32_t *bitmap,
 			return -EIO;
 		if (len < NFS4_MAXLABELLEN) {
 			if (label) {
-				memcpy(label->label, p, len);
+				if (label->len) {
+					if (label->len < len)
+						return -ERANGE;
+					memcpy(label->label, p, len);
+				}
 				label->len = len;
 				label->pi = pi;
 				label->lfs = lfs;
@@ -4197,8 +4201,28 @@ static int decode_attr_time_modify(struct xdr_stream *xdr, uint32_t *bitmap, str
 			status = NFS_ATTR_FATTR_MTIME;
 		bitmap[1] &= ~FATTR4_WORD1_TIME_MODIFY;
 	}
-	dprintk("%s: mtime=%ld\n", __func__, (long)time->tv_sec);
+	dprintk("%s: mtime=%lld\n", __func__, time->tv_sec);
 	return status;
+}
+
+static int decode_attr_xattrsupport(struct xdr_stream *xdr, uint32_t *bitmap,
+				    uint32_t *res)
+{
+	__be32 *p;
+
+	*res = 0;
+	if (unlikely(bitmap[2] & (FATTR4_WORD2_XATTR_SUPPORT - 1U)))
+		return -EIO;
+	if (likely(bitmap[2] & FATTR4_WORD2_XATTR_SUPPORT)) {
+		p = xdr_inline_decode(xdr, 4);
+		if (unlikely(!p))
+			return -EIO;
+		*res = be32_to_cpup(p);
+		bitmap[2] &= ~FATTR4_WORD2_XATTR_SUPPORT;
+	}
+	dprintk("%s: XATTR support=%s\n", __func__,
+		*res == 0 ? "false" : "true");
+	return 0;
 }
 
 static int verify_attr_len(struct xdr_stream *xdr, unsigned int savep, uint32_t attrlen)
@@ -4313,11 +4337,14 @@ static int decode_write_verifier(struct xdr_stream *xdr, struct nfs_write_verifi
 
 static int decode_commit(struct xdr_stream *xdr, struct nfs_commitres *res)
 {
+	struct nfs_writeverf *verf = res->verf;
 	int status;
 
 	status = decode_op_hdr(xdr, OP_COMMIT);
 	if (!status)
-		status = decode_write_verifier(xdr, &res->verf->verifier);
+		status = decode_write_verifier(xdr, &verf->verifier);
+	if (!status)
+		verf->committed = NFS_FILE_SYNC;
 	return status;
 }
 
@@ -4852,6 +4879,11 @@ static int decode_fsinfo(struct xdr_stream *xdr, struct nfs_fsinfo *fsinfo)
 	if (status)
 		goto xdr_error;
 
+	status = decode_attr_xattrsupport(xdr, bitmap,
+					  &fsinfo->xattr_support);
+	if (status)
+		goto xdr_error;
+
 	status = verify_attr_len(xdr, savep, attrlen);
 xdr_error:
 	dprintk("%s: xdr returned %d!\n", __func__, -status);
@@ -5224,7 +5256,7 @@ static int decode_readlink(struct xdr_stream *xdr, struct rpc_rqst *req)
 	 * The XDR encode routine has set things up so that
 	 * the link text will be copied directly into the
 	 * buffer.  We just have to do overflow-checking,
-	 * and and null-terminate the text (the VFS expects
+	 * and null-terminate the text (the VFS expects
 	 * null-termination).
 	 */
 	xdr_terminate_string(rcvbuf, len);
@@ -7453,6 +7485,8 @@ static struct {
 	{ NFS4ERR_SYMLINK,	-ELOOP		},
 	{ NFS4ERR_OP_ILLEGAL,	-EOPNOTSUPP	},
 	{ NFS4ERR_DEADLOCK,	-EDEADLK	},
+	{ NFS4ERR_NOXATTR,	-ENODATA	},
+	{ NFS4ERR_XATTR2BIG,	-E2BIG		},
 	{ -1,			-EIO		}
 };
 
@@ -7581,6 +7615,10 @@ const struct rpc_procinfo nfs4_procedures[] = {
 	PROC42(COPY_NOTIFY,	enc_copy_notify,	dec_copy_notify),
 	PROC(LOOKUPP,		enc_lookupp,		dec_lookupp),
 	PROC42(LAYOUTERROR,	enc_layouterror,	dec_layouterror),
+	PROC42(GETXATTR,	enc_getxattr,		dec_getxattr),
+	PROC42(SETXATTR,	enc_setxattr,		dec_setxattr),
+	PROC42(LISTXATTRS,	enc_listxattrs,		dec_listxattrs),
+	PROC42(REMOVEXATTR,	enc_removexattr,	dec_removexattr),
 };
 
 static unsigned int nfs_version4_counts[ARRAY_SIZE(nfs4_procedures)];
